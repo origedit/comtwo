@@ -1,0 +1,590 @@
+|00 @System &vector $2 &expansion $2 &wst $1 &rst $1 &metadata $2 &r $2 &g $2 &b $2 &debug $1 &state $1
+|10 @Console &vector $2 &read $1 &pad $4 &type $1 &write $1 &error $1
+|a0 @File1 &vector $2 &success $2 &stat $2 &delete $1 &append $1 &name $2 &length $2 &read $2 &write $2
+|b0 @File2 &vector $2 &success $2 &stat $2 &delete $1 &append $1 &name $2 &length $2 &read $2 &write $2
+
+|000
+@source $40
+@here $2
+@reading $2
+@holdp $2
+@varp $2
+@labp $2
+@refp $2
+@linen $2
+@input $1
+
+|100
+@On-reset ( -> )
+	;on-console .Console/vector DEO2
+	BRK
+
+@on-console ( -> )
+	.Console/type DEI DUP #02 NEQ ?{ POP
+		.Console/read DEI ;source append
+	}
+	DUP #04 NEQ ?{ POP
+		;source .File1/name DEO2
+		interpret run
+		#800f DEO BRK
+	}
+	#01 NEQ ?{ .input LDZ ?&input }
+	BRK
+&input ( -> )
+	.Console/read DEI DUP #0a EQU ?&done
+	;line append
+	BRK
+&done ( char -- )
+	POP
+	JMP2r
+
+@dump
+	.varp LDZ2 ;vars &loop
+		LDAk #18 DEO
+		INC2 GTH2k ?&loop
+	POP2 POP2 
+new-line JMP2r
+
+@interpret ( -- )
+	#0000 .linen STZ2
+	;program .here STZ2
+	;vars .varp STZ2
+	;labs .labp STZ2
+	;refs .refp STZ2	
+	#0001 .File1/length DEO2
+	&line ( -- )
+		read-line
+		.linen LDZ2k INC2 ROT STZ2
+		;line .reading STZ2
+		interpret-line
+		.File1/success DEI2 ORA ?&line
+	.refp LDZ2 &ref ( -- )
+		#0008 SUB2
+		LDAk ?&unresolved
+		DUP2 ;refs GTH2 ?&ref
+	POP2
+	JMP2r
+&unresolved ( -> )
+	;unresolved-txt !error
+
+@run ( -- )
+	.here LDZ2 ;program GTH2 ?{
+		;no-program-txt error
+	}
+	;program JSR2
+	JMP2r
+
+@read-line ( -- )
+	;line
+	&c ( -- )
+		DUP2 .File1/read DEO2
+		LDAk #00 EQU ?&end
+		LDAk #0a EQU ?&end
+		LDAk #09 NEQ ?{
+			STH2k #20 STH2r STA
+		}
+		INC2 !&c
+&end ( line* -- )
+	STH2 #00 STH2r STA
+	JMP2r
+
+@next-char ( -- c )
+	.reading LDZ2 LDAk STH INC2 .reading STZ2 STHr JMP2r
+
+@save-char ( -- )
+	.reading LDZ2 #0001 SUB2
+	( ;line GTH2 JMP SWP2 POP2 )
+	.reading STZ2 JMP2r
+
+@is-letter ( c -- flag )
+	DUP LIT "A LTH ?{
+		LIT "Z GTH ?{ #01 JMP2r }
+		#00 JMP2r
+	}
+	POP #00 JMP2r
+
+@skip-word ( -- )
+	next-char is-letter ?skip-word
+	!save-char
+
+@skip-blanks ( -- )
+	next-char #20 EQU ?skip-blanks
+	!save-char
+
+@append ( c s* -- )
+	LDAk ?{
+		STH2k STA #00 STH2r INC2 STA JMP2r
+	}
+	INC2 !append
+
+@strlen ( s* -- n* )
+	[ LIT2r 0000 ] &c
+		LDAk ?{ POP2 STH2r JMP2r }
+		INC2 INC2r !&c
+
+@read-word ( -- )
+	skip-blanks
+	#00 ;word STA
+	#00 &char
+		next-char DUP is-letter ?{
+			POP2 !save-char
+		}
+		;word append
+		INC DUP #06 LTH ?&char
+	POP #00 ;word append
+	!skip-word
+
+@interpret-line ( -- )
+	skip-blanks .reading LDZ2 LDA2
+	OVR ?{ POP2 JMP2r }
+	skip-word
+	;&table &entry ( -- )
+		STH2k
+		LDA2 OVR2 EQU2 ?&found
+		STH2r #0004 ADD2
+		DUP2 ;&table-end LTH2 ?&entry
+	POP2 POP2	
+	;unknown-command-txt error
+&found ( letters* | entry* -- )
+	POP2 STH2r INC2 INC2 LDA2 JMP2
+
+&table [
+	"CO =COMMENT
+	"LE =LET
+	"IF =IF
+	"MA =MARK
+	"GO =GO
+	"CA =CALL
+	"RE =RETURN
+	"PR =PRINT
+	"IN =INPUT
+	"EN =END
+] &table-end
+
+@compile ( instruction -- )
+	.here LDZ2 STH2k STA
+	STH2r INC2 .here STZ2
+	JMP2r
+
+@literal ( n* -- )
+	[ LIT LIT2 ] compile
+	!compile-short
+
+@compile-short ( n* -- )
+	SWP compile !compile
+
+@skip-short ( -- )
+	.here LDZ2k INC2 INC2 ROT STZ2
+	JMP2r
+
+@call ( addr* -- )
+	literal
+	[ LIT JSR2 ] !compile
+
+@expression ( -- found )
+	;hold .holdp STZ2
+	expression/lpar
+	#00 &try ( -- )
+		expression/object
+		STHk ORA STHr ?&try
+	expression/rpar
+	.holdp LDZ2 ;hold EQU2 ?{
+		;bad-expression-txt error
+	}
+	JMP2r
+
+&object ( -- found )
+	skip-blanks
+	next-char ;&table
+	&entry ( -- )
+		STH2k LDA OVR EQU ?&oper
+		STH2r INC2 INC2 INC2
+		DUP2 ;&table-end LTH2 ?&entry
+	POP2 POP
+	save-char
+	number ?&number
+	read-word find-var ORAk ?&var POP2
+	#00 JMP2r
+&number ( n* -- )
+	literal
+	#01 JMP2r
+&oper ( char | entry* -- 1 )
+	POP
+	STH2r INC2 LDA2 JSR2
+	#01 JMP2r
+&var ( var* -- )
+	#0006 ADD2 literal
+	[ LIT LDA2 ] compile
+	#01 JMP2r
+
+&table [
+	"( =&lpar
+	") =&rpar
+	"+ =&add
+	"- =&sub
+	"* =&mul
+	"/ =&div
+	"= =&equal
+	"< =&less
+	"> =&greater
+	"& =&and
+	"| =&or
+	"^ =&xor
+] &table-end
+
+&lpar ( c -- )
+	#0000 #00 !hpush
+&rpar ( -- )
+	hpop ?{ POP2 JMP2r }
+	JSR2 !&rpar
+&add ( -- )
+	;&<add> #05 !operator
+	&<add>
+		[ LIT ADD2 ] compile
+		JMP2r
+&sub ( -- )
+	;&<sub> #05 !operator
+	&<sub>
+		[ LIT SUB2 ] compile
+		JMP2r
+&mul ( -- )
+	;&<mul> #06 !operator
+	&<mul>
+		[ LIT MUL2 ] compile
+		JMP2r
+&div ( -- )
+	;&<div> #06 !operator
+	&<div>
+		[ LIT DIV2 ] compile
+		JMP2r
+&equal ( -- )
+	;&<equal> #02 !operator
+	&<equal>
+		[ LIT EQU2 ] !comparison
+&less ( -- )
+	next-char
+	DUP [ LIT "> ] NEQ ?{
+		POP ;&<nequal> #02 !operator
+	}
+	( [ LIT "< ] NEQ ?{
+		;&<lshift> #02 !operator
+	} )
+	[ LIT "= ] NEQ ?{
+		;&<less-equal> #02 !operator
+	}
+	save-char
+	;&<less> #02 !operator
+	&<less>
+		[ LIT LTH2 ] !comparison
+	&<nequal>
+		[ LIT NEQ2 ] !comparison
+	&<less-equal>
+		expression/<greater> !&<not>
+&greater ( -- )
+	next-char [ LIT "= ] NEQ ?{
+		;&<greater-equal> #02 !operator
+	}
+	save-char
+	;&<greater> #02 !operator
+	&<greater>
+		[ LIT GTH2 ] !comparison
+	&<greater-equal>
+		expression/<less> !&<not>
+&and ( -- )
+	;&<and> #03 !operator
+	&<and>
+		[ LIT AND2 ] compile
+		JMP2r
+&or ( -- )
+	;&<or> #03 !operator
+	&<or>
+		[ LIT ORA2 ] compile
+		JMP2r
+&xor ( -- )
+	;&<xor> #03 !operator
+	&<xor>
+		[ LIT EOR2 ] compile
+		JMP2r
+&not ( -- )
+	;&<not> #02 !operator
+	&<not>
+		#0000 literal
+		[ LIT EQU2 ] !comparison
+
+@hpush ( function* weight -- )
+	.holdp LDZ2
+	STH2k STA
+	INC2r STH2rk STA2
+	STH2r INC2 INC2 .holdp STZ2
+	JMP2r
+
+@hpop ( -- function* weight )
+	.holdp LDZ2 #0002 SUB2
+	STH2k LDA2
+	[ LIT2r 0001 ] SUB2r STH2rk LDA 
+	STH2r .holdp STZ2
+	JMP2r
+
+@operator ( function* weight -- )
+	STHk hpop STHr GTH ?&matter
+	.holdp LDZ2 INC2 INC2 INC2 .holdp STZ2
+	POP2 !hpush
+&matter ( f* w f* -- )
+	JSR2 !hpush
+
+@comparison ( instruction -- )
+	compile
+	[ LIT2 LIT 00 ] compile-short
+	[ LIT SWP ] compile
+	JMP2r
+
+@to-digit ( c -- n 1 | 0 )
+	[ LIT "0 ] SUB
+	DUP #0a LTH ?{ POP #00 JMP2r }
+	#01 JMP2r
+
+@number ( -- n* 1 | 0 )
+	skip-blanks
+	#0000 [ LITr 00 ]
+	&digit ( -- )
+		next-char to-digit STHk ORAr ?{
+			save-char
+			STHr ?{ POP2 #00 JMP2r }
+			#01 JMP2r
+		}
+		STH #000a MUL2 STHr
+		#00 SWP ADD2 !&digit
+
+@find-var ( -- var* )
+	;vars &entry ( -- )
+		DUP2 .varp LDZ2 LTH2 ?{
+			POP2 #0000 JMP2r
+		}
+		DUP2 compare ?&found
+		#0008 ADD2 !&entry
+&found ( entry* -- )
+	JMP2r
+
+@compare ( s* -- flag )
+	;word &char ( -- )
+		LDAk STH OVR2 LDA STHr EQU ?{
+			POP2 POP2 #00 JMP2r
+		}
+		LDAk ?{ POP2 POP2 #01 JMP2r }
+		SWP2 INC2 SWP2
+		INC2 DUP2 ;word/end LTH2 ?&char
+	POP2 POP2 #01 JMP2r
+
+@copy-word ( to* -- )
+	,&to STR2
+	;word strlen INC2 ,&len STR2
+	;&copy .System/expansion DEO2
+	JMP2r
+&copy [ 01 &len $2 0000 =word 0000 &to $2 ]
+
+@COMMENT ( -- )
+	JMP2r
+
+@variable ( -- var* )
+	read-word
+	;word LDA ?{
+		;expected-variable-txt error
+	}
+	find-var ORAk ?{
+		POP2
+		.varp LDZ2 DUP2 ;vars/end LTH2 ?{
+			;variables-txt error
+		}
+		DUP2 copy-word
+		DUP2 #0008 ADD2 .varp STZ2
+	}
+	JMP2r
+
+@LET ( -- )
+	variable
+	expression ?{ ;bad-expression-txt error }
+	#0006 ADD2 literal
+	[ LIT STA2 ] 
+!compile
+
+@IF ( -- )
+	expression ?{ ;bad-expression-txt error }
+	;word LDA2 [ LIT2 "TH ] EQU2 ?{
+		;no-then-txt error
+	}
+	;&do call
+	.here LDZ2
+	skip-short
+	interpret-line 
+	.here LDZ2 SWP2 STA2
+	JMP2r
+&do ( *n -- )
+	ORA ?{
+		LDA2r JMP2r }
+	INC2r INC2r JMP2r
+
+@MARK ( -- )
+	read-word
+	.labp LDZ2 DUP2 ;labs/end LTH2 ?{
+		;labels-txt error
+	}
+	DUP2 #0008 ADD2 .labp STZ2
+	DUP2 copy-word
+	#0006 ADD2 .here LDZ2 SWP2 STA2
+	( resolve references )
+	.refp LDZ2 ;refs &ref ( -- )
+		DUP2 compare #00 EQU ?{
+			STH2k #00 STH2r STA
+			DUP2 #0006 ADD2 LDA2
+			.labp LDZ2 #0002 SUB2 LDA2 SWP2 STA2
+		}
+		#0008 ADD2 GTH2k ?&ref
+	POP2 POP2
+	JMP2r
+
+@GO ( -- )
+	reference
+	[ LIT JMP2 ] !compile
+
+@CALL ( -- )
+	reference
+	[ LIT JSR2 ] !compile
+
+@RETURN ( -- )
+	[ LIT JMP2r ] !compile
+
+@reference ( -- )
+	read-word
+	;word LDA ?{
+		;empty-label-txt error
+	}
+	[ LIT LIT2 ] compile
+	;labs &label ( -- )	
+		DUP2 compare ?&found
+		#0008 ADD2
+		DUP2 .labp LDZ2 LTH2 ?&label
+	POP2
+	( declare reference )
+	;refs &ref ( -- )
+		DUP2 .refp LDZ2 EQU2 ?{
+			LDAk ?{ !&record }
+			#0008 ADD2 !&ref
+		}
+	DUP2 ;refs/end LTH2 ?{
+		;references-txt !error
+	}
+	DUP2 #0008 ADD2 .refp STZ2
+	( >> )
+&record ( ref* -- )
+	DUP2 copy-word
+	#0006 ADD2 .here LDZ2 SWP2 STA2
+	skip-short
+	JMP2r
+&found ( label* -- )
+	#0006 ADD2 LDA2 !compile-short
+
+@PRINT ( -- )
+	&step ( -- )
+		skip-blanks
+		expression ?&num
+		next-char
+		DUP [ LIT "" ] EQU ?&string
+		[ LIT ", ] EQU ?&step
+	save-char
+	;new-line !call
+&num ( n* -- )
+	;print-dec call !&step
+&string ( char -- )
+	POP PRINT-STR !&step
+
+@PRINT-STR ( -- )
+	;&do call
+	&char ( -- )
+		next-char DUP ?{ ;bad-string-txt error }
+		DUP [ LIT "" ] EQU ?{ compile !&char }
+	POP #00 !compile
+&do ( -- )
+( takes string data stored after the calling point )
+	STH2r &step
+		LDAk DUP ?{ POP INC2 JMP2 }
+		#18 DEO
+		INC2 !&step
+
+@INPUT ( -- )
+	variable #0006 ADD2 literal
+	;&do !call
+&do ( vardata* -- )
+	[ LIT2 "? 18 ] DEO
+	#2018 DEO
+	#00 ;line STA
+	[ LIT2 01 -input ] STZ
+	,&go JSR
+	[ LIT2 00 -input ] STZ
+	;line .reading STZ2
+	number ?{ !&do }
+	SWP2 STA2
+	JMP2r
+&go ( -> )
+	BRK
+
+@END ( -- )
+	[ LIT JMP2r ] !compile
+
+@print ( s* -- )
+	LDAk DUP ?{
+		POP POP2 JMP2r
+	}
+	#18 DEO INC2 !print
+
+@print-dec ( n* -- )
+	[ LITr ff ]
+	&digit ( -- ... )
+		DUP2 #000a DIV2k MUL2 SUB2
+		NIP STH
+		#000a DIV2 ORAk ?&digit
+	POP2
+	&print ( ... -- )
+		STHr INCk ?{ POP JMP2r }
+		[ LIT "0 ] ADD #18 DEO !&print
+
+@error ( s* -- )
+	error/print
+	;&at-txt error/print
+	.linen LDZ2 print-dec
+	#0a19 DEO
+	#010f DEO BRK
+&print ( s* -- )
+	LDAk DUP ?{
+		POP POP2 JMP2r
+	}
+	#19 DEO INC2 !print
+&at-txt [ 20 "at 20 "line 20 00 ]
+
+@new-line ( -- )
+	#0a18 DEO JMP2r
+
+@unknown-command-txt [ "unknown 20 "command 00 ]
+@no-program-txt [ "no 20 "program 00 ]
+@bad-expression-txt [ "bad 20 "expression 00 ]
+@bad-string-txt [ "bad 20 "string 00 ]
+@variables-txt [ "too 20 "many 20 "variables 00 ]
+@labels-txt [ "too 20 "many 20 "labels 00 ]
+@references-txt [ "too 20 "many 20 "references 00 ]
+@unresolved-txt [ "unresolved 20 "reference 00 ]
+@no-then-txt [ "expected 20 "THEN 00 ]
+@empty-label-txt [ "empty 20 "label 00 ]
+@expected-variable-txt [ "expected 20 "a 20 "variable 00 ]
+
+@debug #010e DEO JMP2r
+
+@line $80
+@word $06 &end 00
+
+@hold $20
+
+@vars $1000 &end
+@labs $1000 &end
+@refs $1000 &end
+
+@program
+
